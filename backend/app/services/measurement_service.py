@@ -152,6 +152,7 @@ def record_entries(station_id, measured_at, period, entries, data_source="manual
             "created_count": len(created),
             "updated_count": len(updated),
             "exceeded_count": len([item for item in evaluated if item["exceeded"]]),
+            "not_assessed_count": len([item for item in evaluated if not item["applicable"]]),
             "duplicate_count": len(duplicates),
         },
     }

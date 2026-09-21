@@ -78,7 +78,12 @@ export default function QueryPage() {
           label="超标记录"
           value={summary ? summary.exceeded_count : '-'}
           tone={summary?.exceeded_count ? 'danger' : undefined}
-          foot={summary ? `超标率 ${formatPercent(summary.exceed_rate)}` : ''}
+          foot={
+            summary
+              ? `达标率 ${formatPercent(summary.attainment_rate)}(考核 ${summary.assessed_count} 条)` +
+                (summary.not_assessed_count ? ` · ${summary.not_assessed_count} 条无限值未参与` : '')
+              : ''
+          }
         />
         <StatCard label="平均浓度" value={summary ? formatNumber(summary.avg_value) : '-'} foot="按当前筛选范围计算" />
         <StatCard

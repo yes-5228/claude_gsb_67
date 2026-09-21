@@ -2,8 +2,8 @@
 from flask import Blueprint, current_app, request
 
 from ..domain.constants import DATA_SOURCE_LABELS, PERIOD_LABELS, STATION_TYPE_LABELS
-from ..domain.standards import POLLUTANTS
-from ..services import query_service
+from ..domain.standards import POLLUTANTS, assessable_pairs
+from ..services import attainment_service, query_service
 from ..utils.pagination import paginate_query
 
 bp = Blueprint("query", __name__)
@@ -63,3 +63,27 @@ def query_options():
         {"value": key, "label": label} for key, label in DATA_SOURCE_LABELS.items()
     ]
     return payload
+
+
+@bp.get("/attainment/scope")
+def attainment_scope():
+    """达标率考核口径说明: 哪些因子 + 数据周期参与计算."""
+    return {"items": assessable_pairs()}
+
+
+@bp.get("/attainment/published")
+def attainment_published():
+    """已对外发布的月度达标率快照清单."""
+    return {"items": attainment_service.list_published()}
+
+
+@bp.post("/attainment/publish")
+def attainment_publish():
+    """冻结某月达标率; 已发布月份不再参与重算."""
+    payload = request.get_json(silent=True) or {}
+    record = attainment_service.publish_month(
+        payload.get("month"),
+        published_by=(payload.get("published_by") or "").strip() or None,
+        note=(payload.get("note") or "").strip() or None,
+    )
+    return record.to_dict(), 201

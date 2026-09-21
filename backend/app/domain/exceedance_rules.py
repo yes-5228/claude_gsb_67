@@ -58,8 +58,11 @@ def evaluate(pollutant_code, period, value):
 def summarize(results):
     """Aggregate evaluation results for the batch entry form."""
     exceeded = [item for item in results if item["exceeded"]]
+    not_assessed = [item for item in results if not item["applicable"]]
     return {
         "total": len(results),
+        "assessed_count": len(results) - len(not_assessed),
+        "not_assessed_count": len(not_assessed),
         "exceeded_count": len(exceeded),
         "exceeded_pollutants": [item["pollutant"] for item in exceeded],
     }

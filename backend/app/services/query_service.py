@@ -15,6 +15,7 @@ from ..extensions import db
 from ..models import Exceedance, Measurement, Station
 from ..models.base import iso
 from ..utils.validation import parse_date
+from . import attainment_service
 
 GROUP_BY_CHOICES = ("station", "area", "pollutant", "period", "day", "month", "data_source")
 METRIC_CHOICES = ("avg", "max", "min", "count", "sum")
@@ -164,11 +165,16 @@ def measurement_query(args):
 
 
 def summary(filters):
-    """Aggregate counters shown above the query result table."""
+    """Aggregate counters shown above the query result table.
+
+    达标率/超标率的分母只含参与考核(有限值)的记录; 无限值仅记录的数据
+    单独计入 ``not_assessed_count``, 不进分母。
+    """
     query = apply_filters(
         db.session.query(
             func.count(Measurement.id),
             func.sum(cast(Measurement.is_exceeded, db.Integer)),
+            func.sum(cast(Measurement.limit_value.isnot(None), db.Integer)),
             func.count(func.distinct(Measurement.station_id)),
             func.min(Measurement.measured_at),
             func.max(Measurement.measured_at),
@@ -176,13 +182,18 @@ def summary(filters):
         ),
         filters,
     )
-    total, exceeded, stations, first_at, last_at, avg_value = query.one()
+    total, exceeded, assessed, stations, first_at, last_at, avg_value = query.one()
     total = int(total or 0)
     exceeded = int(exceeded or 0)
+    assessed = int(assessed or 0)
+    exceed_rate = round(exceeded / assessed, 4) if assessed else 0.0
     return {
         "total": total,
+        "assessed_count": assessed,
+        "not_assessed_count": total - assessed,
         "exceeded_count": exceeded,
-        "exceed_rate": round(exceeded / total, 4) if total else 0.0,
+        "exceed_rate": exceed_rate,
+        "attainment_rate": round(1 - exceed_rate, 4) if assessed else 1.0,
         "station_count": int(stations or 0),
         "first_measured_at": iso(first_at),
         "last_measured_at": iso(last_at),
@@ -198,6 +209,50 @@ def _metric_expression(metric):
         "count": func.count(Measurement.id),
         "sum": func.sum(Measurement.value),
     }[metric]
+
+
+def _is_network_scope(filters):
+    """True when no narrowing filter is applied (全网口径).
+
+    已发布月度达标率按全网口径存档, 仅在未加筛选的按月统计中套用,
+    带筛选条件的统计始终按实时数据计算。
+    """
+    return not any(
+        [
+            filters["station_ids"],
+            filters["areas"],
+            filters["station_types"],
+            filters["pollutants"],
+            filters["periods"],
+            filters["data_sources"],
+            filters["exceedance_status"],
+            filters["is_exceeded"] is not None,
+            filters["date_from"],
+            filters["date_to"],
+            filters["min_value"] is not None,
+            filters["max_value"] is not None,
+            filters["keyword"],
+            filters["recorder"],
+        ]
+    )
+
+
+def _published_item(snapshot):
+    """Build a statistics row from a published monthly snapshot (不再重算)."""
+    return {
+        "key": snapshot.month,
+        "label": snapshot.month,
+        "value": None,
+        "count": snapshot.total_count,
+        "assessed_count": snapshot.assessed_count,
+        "not_assessed_count": snapshot.not_assessed_count,
+        "exceeded_count": snapshot.exceeded_count,
+        "exceed_rate": snapshot.exceed_rate,
+        "attainment_rate": snapshot.attainment_rate,
+        "published": True,
+        "published_rule": snapshot.rule,
+        "published_at": iso(snapshot.published_at),
+    }
 
 
 def statistics(args):
@@ -217,6 +272,9 @@ def statistics(args):
     value_expr = _metric_expression(metric).label("metric_value")
     count_expr = func.count(Measurement.id).label("row_count")
     exceeded_expr = func.sum(cast(Measurement.is_exceeded, db.Integer)).label("exceeded_count")
+    assessed_expr = func.sum(cast(Measurement.limit_value.isnot(None), db.Integer)).label(
+        "assessed_count"
+    )
 
     if group_by == "station":
         query = db.session.query(
@@ -227,23 +285,26 @@ def statistics(args):
             value_expr,
             count_expr,
             exceeded_expr,
+            assessed_expr,
         ).group_by(Station.id, Station.code, Station.name, Station.area)
         is_time_group = False
     elif group_by == "area":
         query = db.session.query(
-            Station.area.label("area"), value_expr, count_expr, exceeded_expr
+            Station.area.label("area"), value_expr, count_expr, exceeded_expr, assessed_expr
         ).group_by(Station.area)
         is_time_group = False
     elif group_by == "day":
         bucket = func.date(Measurement.measured_at).label("bucket")
-        query = db.session.query(bucket, value_expr, count_expr, exceeded_expr).group_by(bucket)
+        query = db.session.query(
+            bucket, value_expr, count_expr, exceeded_expr, assessed_expr
+        ).group_by(bucket)
         is_time_group = True
     elif group_by == "month":
         year = func.extract("year", Measurement.measured_at).label("year")
         month = func.extract("month", Measurement.measured_at).label("month")
-        query = db.session.query(year, month, value_expr, count_expr, exceeded_expr).group_by(
-            year, month
-        )
+        query = db.session.query(
+            year, month, value_expr, count_expr, exceeded_expr, assessed_expr
+        ).group_by(year, month)
         is_time_group = True
     else:
         column = {
@@ -252,7 +313,7 @@ def statistics(args):
             "data_source": Measurement.data_source,
         }[group_by]
         query = db.session.query(
-            column.label("bucket"), value_expr, count_expr, exceeded_expr
+            column.label("bucket"), value_expr, count_expr, exceeded_expr, assessed_expr
         ).group_by(column)
         is_time_group = False
 
@@ -264,6 +325,7 @@ def statistics(args):
         data = dict(row._mapping)
         count = int(data.get("row_count") or 0)
         exceeded = int(data.get("exceeded_count") or 0)
+        assessed = int(data.get("assessed_count") or 0)
         raw_value = data.get("metric_value")
         if group_by == "station":
             key = data.get("station_code")
@@ -287,15 +349,34 @@ def statistics(args):
             key = data.get("bucket")
             label = DATA_SOURCE_LABELS.get(key, key)
 
+        exceed_rate = round(exceeded / assessed, 4) if assessed else 0.0
         items.append(
             {
                 "key": key,
                 "label": label,
                 "value": round(float(raw_value), 2) if raw_value is not None else None,
                 "count": count,
+                "assessed_count": assessed,
+                "not_assessed_count": count - assessed,
                 "exceeded_count": exceeded,
-                "exceed_rate": round(exceeded / count, 4) if count else 0.0,
+                "exceed_rate": exceed_rate,
+                "attainment_rate": round(1 - exceed_rate, 4) if assessed else 1.0,
+                "published": False,
             }
+        )
+
+    if group_by == "month" and _is_network_scope(filters):
+        # 已对外发布的月份以快照为准, 不参与重算
+        published = attainment_service.published_map()
+        items = [
+            _published_item(published[item["key"]]) if item["key"] in published else item
+            for item in items
+        ]
+        covered = {item["key"] for item in items}
+        items.extend(
+            _published_item(snapshot)
+            for month, snapshot in sorted(published.items())
+            if month not in covered
         )
 
     if is_time_group:

@@ -12,7 +12,7 @@
 | 监测点台账 | `/stations` | 台账增删改查、区域/类型/状态筛选、点位详情与分因子统计、级联清理关联数据 |
 | 监测数据录入 | `/measurements` | 按“监测点 + 时刻 + 周期”成组录入多因子浓度、超标校验预览、重复数据覆盖、录入结果回执 |
 | 超标记录标注 | `/exceedances` | 超标自动建单、单条/批量标注(确认 / 忽略 / 重置)、等级人工修正、标注留痕与统计 |
-| 数据查询 | `/query` | 多条件组合检索、聚合统计(按因子/站点/区域/日/月等)、分页浏览、CSV 导出 |
+| 数据查询 | `/query` | 多条件组合检索、聚合统计(按因子/站点/区域/日/月等, 达标率按考核口径计算)、分页浏览、CSV 导出 |
 
 设计要点:
 
@@ -40,7 +40,7 @@
 │   │   ├── config.py            # 多环境配置 (development/production/testing)
 │   │   ├── extensions.py        # db / cors 单例, SQLite 外键开关
 │   │   ├── errors.py            # 统一异常与 JSON 错误响应
-│   │   ├── commands.py          # flask init-db / seed / reset-db / stats
+│   │   ├── commands.py          # flask init-db / seed / reset-db / stats / publish-rate / freeze-legacy-rates
 │   │   ├── seed.py              # 演示数据生成与启动引导
 │   │   ├── domain/              # 业务规则: 因子限值、枚举、超标分级
 │   │   ├── models/              # Station / Measurement / Exceedance
@@ -80,7 +80,7 @@ docker compose up -d --build
 | 前端 | http://localhost:8080 | Nginx 托管, `/api` 反向代理到后端 |
 | 后端 | http://localhost:5000/api/meta/health | 健康检查 |
 
-首次启动会自动建表并写入演示数据(8 个监测点 / 1200 条监测数据 / 52 条超标记录), 可通过环境变量 `SEED_DEMO=false` 关闭。
+首次启动会自动建表并写入演示数据(8 个监测点 / 2640 条监测数据 / 127 条超标记录, 含两个已发布达标率的历史月份), 可通过环境变量 `SEED_DEMO=false` 关闭。
 
 ```bash
 docker compose ps          # 查看容器与健康状态
@@ -141,6 +141,14 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --buil
 - **无 1 小时限值的因子**(PM2.5、PM10 小时值)仅记录数值, 不参与超标判定, 避免误报。
 - **标注状态**: `待标注(pending)` 由系统自动创建, 人工标注为 `已确认(confirmed)` 或 `已忽略(ignored)`; 确认与忽略都必须填写标注说明, 用于后续追溯。
 
+## 达标率计算规则
+
+达标率 = 1 − 超标率, **超标率 = 超标记录数 ÷ 参与考核记录数**。规则集中在 `backend/app/services/query_service.py` 与 `backend/app/services/attainment_service.py`。
+
+- **参与考核的范围**: 仅“标准中设定了限值的因子 + 数据周期”组合(见 `/api/query/attainment/scope`)。PM2.5、PM10 的 1 小时均值未设限值, 对应记录**仅存档、不进入达标率分母**; 数据表中以 `limit_value IS NOT NULL` 为准(限值在写入时快照)。
+- **无限值记录单独说明**: 查询汇总与分组统计均返回 `assessed_count`(考核数)与 `not_assessed_count`(未考核数), 列表中此类记录标记为“仅记录”, 与录入时的判定说明一致。
+- **历史月份不重算**: 已对外发布的月度达标率存档于 `published_rates` 表, 无筛选的按月统计直接返回快照并标记 `published`; 带筛选条件的统计始终按实时数据计算。发布通过 `POST /api/query/attainment/publish` 或 `flask publish-rate YYYY-MM` 完成, 已发布月份重复发布返回 409; 系统上线前的历史月份可用 `flask freeze-legacy-rates` 按**旧口径**(分母含无限值记录)一次性冻结, 保证已对外给出的数字不被口径调整改写。
+
 ## API 概览
 
 统一前缀 `/api`, 成功直接返回数据对象; 失败返回 `{"error": {"code": "...", "message": "...", "fields": {...}}}`。
@@ -166,8 +174,11 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --buil
 | POST | `/api/exceedances/annotations` | 批量标注 |
 | GET | `/api/exceedances/summary` | 超标统计(状态/等级/高发因子/站点排名) |
 | GET | `/api/query/measurements` | 高级条件检索 |
-| GET | `/api/query/statistics` | 聚合统计(`group_by` + `metric`) |
+| GET | `/api/query/statistics` | 聚合统计(`group_by` + `metric`, 含考核口径达标率) |
 | GET | `/api/query/export` | 查询结果导出 CSV |
+| GET | `/api/query/attainment/scope` | 达标率考核范围(参与计算的因子 + 周期清单) |
+| GET | `/api/query/attainment/published` | 已发布月度达标率快照清单 |
+| POST | `/api/query/attainment/publish` | 发布(冻结)某月达标率, 已发布月份不重算 |
 
 `POST /api/measurements/entries` 请求示例:
 
@@ -196,7 +207,7 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --buil
   "updated": [],
   "exceedances": [ { "pollutant": "SO2", "level": "moderate", "exceed_ratio": 1.28 } ],
   "duplicates": [],
-  "summary": { "created_count": 3, "updated_count": 0, "exceeded_count": 1, "duplicate_count": 0 }
+  "summary": { "created_count": 3, "updated_count": 0, "exceeded_count": 1, "not_assessed_count": 0, "duplicate_count": 0 }
 }
 ```
 
@@ -207,6 +218,7 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --buil
 | `stations` | `code`(唯一) `name` `area` `station_type` `status` `longitude/latitude` `installed_at` | 监测点台账 |
 | `measurements` | `station_id` `pollutant` `period` `value` `limit_value` `exceed_ratio` `is_exceeded` `measured_at` `data_source` `recorder` | 监测数据; `(station_id, pollutant, period, measured_at)` 唯一 |
 | `exceedances` | `measurement_id`(唯一) `status` `level` `note` `annotator` `annotated_at` | 超标记录与人工标注 |
+| `published_rates` | `month`(唯一) `rule` `assessed_count` `exceeded_count` `exceed_rate` `attainment_rate` `published_at` | 已对外发布的月度达标率快照, 不参与重算 |
 
 删除监测点会级联清理其监测数据与超标记录; 删除监测数据会同时删除对应超标记录。
 
@@ -228,7 +240,7 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --buil
 
 ```bash
 cd backend
-python -m pytest -q          # 43 个用例: 台账 CRUD/级联、录入与超标判定、标注规则、查询统计与导出、元数据接口
+python -m pytest -q          # 54 个用例: 台账 CRUD/级联、录入与超标判定、标注规则、达标率口径与已发布月份、查询统计与导出、元数据接口
 
 cd frontend
 npm run build                # 生产构建校验
@@ -240,6 +252,8 @@ npm run build                # 生产构建校验
 curl http://localhost:5000/api/meta/health
 python -m flask --app wsgi stats      # 查看监测点/数据/超标记录数量
 python -m flask --app wsgi reset-db   # 重置数据库并重建演示数据
+python -m flask --app wsgi publish-rate 2026-08 --by 考核办   # 发布(冻结)某月达标率
+python -m flask --app wsgi freeze-legacy-rates  # 历史月份按旧口径一次性冻结(上线迁移用)
 ```
 
 ## 常见问题

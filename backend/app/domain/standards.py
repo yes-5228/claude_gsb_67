@@ -54,6 +54,8 @@ POLLUTANTS = {
 
 POLLUTANT_CODES = tuple(POLLUTANTS.keys())
 
+PERIODS = ("hourly", "daily")
+
 
 def get_pollutant(code):
     """Return the pollutant definition or None when unknown."""
@@ -66,6 +68,32 @@ def get_limit(code, period):
     if not pollutant:
         return None
     return pollutant["limits"].get(period)
+
+
+def is_assessable(code, period):
+    """Whether a pollutant/period pair has a limit and thus joins the attainment rate.
+
+    PM2.5 / PM10 小时均值未设限值, 对应记录仅存档, 不参与达标率考核。
+    """
+    return get_limit(code, period) is not None
+
+
+def assessable_pairs():
+    """Serialisable list of (pollutant, period) pairs that join the attainment rate."""
+    pairs = []
+    for pollutant in POLLUTANTS.values():
+        for period in PERIODS:
+            limit = pollutant["limits"].get(period)
+            pairs.append(
+                {
+                    "pollutant": pollutant["code"],
+                    "pollutant_label": pollutant["label"],
+                    "period": period,
+                    "assessable": limit is not None,
+                    "limit": limit,
+                }
+            )
+    return pairs
 
 
 def pollutant_options():

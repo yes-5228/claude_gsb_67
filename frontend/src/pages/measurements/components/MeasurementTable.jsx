@@ -39,7 +39,13 @@ export default function MeasurementTable({ rows, loading, onDelete }) {
       key: 'is_exceeded',
       title: '超标判定',
       render: (row) =>
-        row.is_exceeded ? <Tag tone="danger">{formatRatio(row.exceed_ratio)}</Tag> : <Tag tone="success">达标</Tag>
+        row.limit_value === null ? (
+          <Tag tone="neutral" title="该因子此时段未设限值, 不参与达标率考核">仅记录</Tag>
+        ) : row.is_exceeded ? (
+          <Tag tone="danger">{formatRatio(row.exceed_ratio)}</Tag>
+        ) : (
+          <Tag tone="success">达标</Tag>
+        )
     },
     {
       key: 'data_source_label',

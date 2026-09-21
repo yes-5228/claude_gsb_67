@@ -61,7 +61,13 @@ def test_preview_validates_without_writing(client, station, entry_payload):
     response = client.post("/api/measurements/preview", json=payload)
     assert response.status_code == 200
     body = response.get_json()
-    assert body["summary"] == {"total": 2, "exceeded_count": 1, "exceeded_pollutants": ["PM25"]}
+    assert body["summary"] == {
+        "total": 2,
+        "assessed_count": 2,
+        "not_assessed_count": 0,
+        "exceeded_count": 1,
+        "exceeded_pollutants": ["PM25"],
+    }
     assert body["results"][0]["limit"] == 75.0
     assert body["results"][0]["level"] == "light"
     assert Measurement.query.count() == 0

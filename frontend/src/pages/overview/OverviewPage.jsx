@@ -64,7 +64,7 @@ export default function OverviewPage() {
           label="超标记录"
           value={exceedances.total}
           tone={exceedances.total ? 'danger' : undefined}
-          foot={`超标率 ${formatPercent(measurements.exceed_rate)} · 最大 ${formatRatio(exceedances.max_ratio)}`}
+          foot={`达标率 ${formatPercent(measurements.attainment_rate)}(考核 ${measurements.assessed_count} 条) · 最大 ${formatRatio(exceedances.max_ratio)}`}
         />
         <StatCard
           label="待标注超标"

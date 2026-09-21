@@ -24,7 +24,14 @@ export default function QueryResultTable({ rows, loading }) {
     {
       key: 'is_exceeded',
       title: '超标',
-      render: (row) => (row.is_exceeded ? <Tag tone="danger">是</Tag> : <Tag tone="success">否</Tag>)
+      render: (row) =>
+        row.limit_value === null ? (
+          <Tag tone="neutral" title="该因子此时段未设限值, 不参与达标率考核">仅记录</Tag>
+        ) : row.is_exceeded ? (
+          <Tag tone="danger">是</Tag>
+        ) : (
+          <Tag tone="success">否</Tag>
+        )
     },
     {
       key: 'exceedance_status',

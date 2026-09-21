@@ -102,3 +102,61 @@ def test_query_options_payload(client):
     body = client.get("/api/query/options").get_json()
     assert "day" in body["group_by"]
     assert {item["value"] for item in body["pollutants"]} == {"PM25", "PM10", "SO2", "NO2", "CO", "O3"}
+
+
+def test_summary_excludes_limitless_records_from_rate(client, station, entry_payload):
+    """PM2.5 小时均值无限值, 仅记录不参与达标率分母."""
+    client.post(
+        "/api/measurements/entries",
+        json=entry_payload(
+            station.id,
+            measured_at="2026-09-01 10:00",
+            entries=[
+                {"pollutant": "PM25", "value": 60.0},   # 小时值无限值, 仅记录
+                {"pollutant": "PM10", "value": 300.0},  # 小时值无限值, 仅记录
+                {"pollutant": "SO2", "value": 900.0},   # 超标
+                {"pollutant": "CO", "value": 1.2},      # 达标
+            ],
+        ),
+    )
+    summary = client.get("/api/query/measurements").get_json()["summary"]
+    assert summary["total"] == 4
+    assert summary["assessed_count"] == 2
+    assert summary["not_assessed_count"] == 2
+    assert summary["exceeded_count"] == 1
+    assert summary["exceed_rate"] == 0.5
+    assert summary["attainment_rate"] == 0.5
+
+
+def test_statistics_rate_uses_assessed_denominator(client, station, entry_payload):
+    client.post(
+        "/api/measurements/entries",
+        json=entry_payload(
+            station.id,
+            measured_at="2026-09-01 10:00",
+            entries=[
+                {"pollutant": "PM25", "value": 60.0},
+                {"pollutant": "SO2", "value": 900.0},
+                {"pollutant": "CO", "value": 1.2},
+            ],
+        ),
+    )
+    body = client.get("/api/query/statistics?group_by=pollutant&metric=count").get_json()
+    items = {item["key"]: item for item in body["items"]}
+    # PM2.5 小时值无限值: 不计入考核, 超标率为 0 而非被算作达标项
+    assert items["PM25"]["assessed_count"] == 0
+    assert items["PM25"]["not_assessed_count"] == 1
+    assert items["PM25"]["exceed_rate"] == 0.0
+    assert items["SO2"]["assessed_count"] == 1
+    assert items["SO2"]["exceed_rate"] == 1.0
+    assert items["SO2"]["attainment_rate"] == 0.0
+    assert items["CO"]["attainment_rate"] == 1.0
+
+
+def test_attainment_scope_lists_assessable_pairs(client):
+    body = client.get("/api/query/attainment/scope").get_json()
+    pairs = {(item["pollutant"], item["period"]): item["assessable"] for item in body["items"]}
+    assert pairs[("PM25", "hourly")] is False
+    assert pairs[("PM10", "hourly")] is False
+    assert pairs[("PM25", "daily")] is True
+    assert pairs[("SO2", "hourly")] is True

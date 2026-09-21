@@ -2,6 +2,7 @@ import { SectionCard } from '../../../components/common/Card.jsx'
 import { Alert, EmptyState, Loading } from '../../../components/common/Feedback.jsx'
 import BarChart from '../../../components/common/BarChart.jsx'
 import { Field, Select } from '../../../components/common/FormField.jsx'
+import Tag from '../../../components/common/Tag.jsx'
 import { formatNumber, formatPercent } from '../../../utils/format.js'
 
 const GROUP_OPTIONS = [
@@ -29,7 +30,7 @@ export default function StatisticsPanel({ params, onChange, data, loading, error
   return (
     <SectionCard
       title="聚合统计"
-      hint="统计基于上方筛选条件, 可与结果表交叉验证"
+      hint="达标率/超标率仅按有限值的考核记录计算; 已发布月份按对外发布的快照展示, 不重算"
       actions={
         <>
           <div style={{ width: 160 }}>
@@ -68,18 +69,32 @@ export default function StatisticsPanel({ params, onChange, data, loading, error
                     <th>分组</th>
                     <th className="text-right">{isCount ? '数据条数' : '统计值'}</th>
                     <th className="text-right">数据量</th>
+                    <th className="text-right">考核数</th>
                     <th className="text-right">超标数</th>
                     <th className="text-right">超标率</th>
+                    <th className="text-right">未考核</th>
                   </tr>
                 </thead>
                 <tbody>
                   {items.map((item) => (
                     <tr key={item.key}>
-                      <td>{item.label}</td>
+                      <td>
+                        {item.label}
+                        {item.published ? (
+                          <>
+                            {' '}
+                            <Tag tone="warning" title="该月达标率已对外发布, 按发布快照展示, 不参与重算">
+                              已发布
+                            </Tag>
+                          </>
+                        ) : null}
+                      </td>
                       <td className="text-right strong">{formatNumber(item.value)}</td>
                       <td className="text-right">{item.count}</td>
+                      <td className="text-right">{item.assessed_count}</td>
                       <td className="text-right danger-text">{item.exceeded_count}</td>
                       <td className="text-right">{formatPercent(item.exceed_rate)}</td>
+                      <td className="text-right muted">{item.not_assessed_count || '-'}</td>
                     </tr>
                   ))}
                 </tbody>

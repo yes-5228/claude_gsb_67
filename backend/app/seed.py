@@ -75,6 +75,18 @@ def _value(pollutant, period, station_type, rng):
     return round(value, 2 if pollutant == "CO" else 1)
 
 
+def _previous_months(today, count=2):
+    """Return [(year, month), ...] for the ``count`` months before the current one."""
+    year, month = today.year, today.month
+    months = []
+    for _ in range(count):
+        month -= 1
+        if month == 0:
+            year, month = year - 1, 12
+        months.append((year, month))
+    return months
+
+
 def seed_demo_data(days=5, rng=None, recorder_pool=RECORDERS):
     """Generate demo stations and monitoring records through the normal service path."""
     from .services import measurement_service
@@ -124,6 +136,44 @@ def seed_demo_data(days=5, rng=None, recorder_pool=RECORDERS):
                 totals["measurements"] += result["summary"]["created_count"]
                 totals["exceedances"] += result["summary"]["exceeded_count"]
 
+    # 前两个月的少量历史数据, 用于演示“已发布月度达标率不参与重算”;
+    # 含部分小时记录(PM2.5/PM10 小时值无限值), 可直观看到旧口径与现行口径的差异
+    for year, month in _previous_months(today):
+        for day in range(1, 6):
+            for station in created_stations:
+                daily_entries = [
+                    {"pollutant": code, "value": _value(code, "daily", station.station_type, rng)}
+                    for code in POLLUTANT_BASE
+                ]
+                result = measurement_service.record_entries(
+                    station_id=station.id,
+                    measured_at=datetime(year, month, day, 0, 0),
+                    period="daily",
+                    entries=daily_entries,
+                    data_source="import",
+                    recorder=rng.choice(recorder_pool),
+                    remark="历史月份补录",
+                )
+                totals["measurements"] += result["summary"]["created_count"]
+                totals["exceedances"] += result["summary"]["exceeded_count"]
+
+                for hour in (8, 20):
+                    hourly_entries = [
+                        {"pollutant": code, "value": _value(code, "hourly", station.station_type, rng)}
+                        for code in HOURLY_FACTOR
+                    ]
+                    result = measurement_service.record_entries(
+                        station_id=station.id,
+                        measured_at=datetime(year, month, day, hour, 0),
+                        period="hourly",
+                        entries=hourly_entries,
+                        data_source="import",
+                        recorder=rng.choice(recorder_pool),
+                        remark="历史月份补录",
+                    )
+                    totals["measurements"] += result["summary"]["created_count"]
+                    totals["exceedances"] += result["summary"]["exceeded_count"]
+
     # 标注一部分超标记录, 让工作台同时存在待办与已处理记录
     from .services import exceedance_service
 
@@ -144,6 +194,12 @@ def seed_demo_data(days=5, rng=None, recorder_pool=RECORDERS):
             )
         annotated += 1
     totals["annotated"] = annotated
+
+    # 历史月份按旧口径冻结已对外发布的达标率, 之后口径调整不再回算这些月份
+    from .services import attainment_service
+
+    frozen = attainment_service.freeze_legacy_months()
+    totals["published_months"] = len(frozen)
     return totals
 
 

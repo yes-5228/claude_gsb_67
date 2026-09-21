@@ -47,7 +47,10 @@ export default function EntryResultPanel({ result, summary, onClose }) {
               <div className="stat-card">
                 <div className="stat-label">其中超标</div>
                 <div className="stat-value danger-text">{summary.exceeded_count}</div>
-                <div className="stat-foot">超标率 {formatPercent(summary.exceed_rate)}</div>
+                <div className="stat-foot">
+                  达标率 {formatPercent(summary.attainment_rate)}(考核 {summary.assessed_count} 条)
+                  {summary.not_assessed_count ? ` · ${summary.not_assessed_count} 条无限值未参与` : ''}
+                </div>
               </div>
               <div className="stat-card">
                 <div className="stat-label">涉及监测点</div>
@@ -134,6 +137,9 @@ export default function EntryResultPanel({ result, summary, onClose }) {
             {payload.summary.exceeded_pollutants.length
               ? `: ${payload.summary.exceeded_pollutants.join(', ')}`
               : ''}
+            {payload.summary.not_assessed_count
+              ? `; ${payload.summary.not_assessed_count} 个因子未设限值仅记录, 不参与达标率考核`
+              : ''}
           </Alert>
         ) : (
           <div className="stat-grid">
@@ -148,6 +154,11 @@ export default function EntryResultPanel({ result, summary, onClose }) {
             <div className="stat-card">
               <div className="stat-label">超标</div>
               <div className="stat-value danger-text">{payload.summary.exceeded_count}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">仅记录</div>
+              <div className="stat-value">{payload.summary.not_assessed_count ?? 0}</div>
+              <div className="stat-foot">无限值, 不参与考核</div>
             </div>
             <div className="stat-card">
               <div className="stat-label">跳过重复</div>

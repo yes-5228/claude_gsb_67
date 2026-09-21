@@ -52,3 +52,43 @@ def register_commands(app):
                 Exceedance.query.count(),
             )
         )
+
+    @app.cli.command("publish-rate")
+    @click.argument("month")
+    @click.option("--by", "published_by", default=None, help="发布人")
+    @click.option("--note", default=None, help="发布说明")
+    def publish_rate(month, published_by, note):
+        """冻结某月达标率 (YYYY-MM); 已发布月份不再重算."""
+        from .services import attainment_service
+        from .errors import ApiError
+
+        try:
+            record = attainment_service.publish_month(
+                month, published_by=published_by, note=note
+            )
+        except ApiError as exc:
+            raise click.ClickException(exc.message)
+        click.echo(
+            "%s 达标率已发布: 达标率 %.2f%% (考核 %d 条, 超标 %d 条)"
+            % (
+                record.month,
+                record.attainment_rate * 100,
+                record.assessed_count,
+                record.exceeded_count,
+            )
+        )
+
+    @app.cli.command("freeze-legacy-rates")
+    @click.option("--note", default=None, help="快照说明")
+    def freeze_legacy_rates(note):
+        """一次性迁移: 历史月份按旧口径快照, 保护已对外发布的达标率."""
+        from .services import attainment_service
+
+        frozen = attainment_service.freeze_legacy_months(note=note)
+        if not frozen:
+            click.echo("没有需要冻结的历史月份")
+            return
+        for item in frozen:
+            click.echo(
+                "%s 已按旧口径冻结: 达标率 %.2f%%" % (item["month"], item["attainment_rate"] * 100)
+            )
