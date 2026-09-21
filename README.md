@@ -28,7 +28,7 @@
 | 数据库 | SQLite(默认, 零依赖) / PostgreSQL 16(可选, compose 覆盖文件) |
 | 前端 | React 18 · React Router 6 · Vite 7 · Axios · 原生 CSS(设计令牌 + 组件类) |
 | 部署 | Docker 多阶段构建 · Nginx 静态托管与 `/api` 反向代理 · docker compose |
-| 测试 | Pytest(43 个后端用例: 接口 + 领域规则) |
+| 测试 | Pytest(52 个后端用例: 接口 + 领域规则) |
 
 ## 目录结构
 
@@ -141,6 +141,14 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --buil
 - **无 1 小时限值的因子**(PM2.5、PM10 小时值)仅记录数值, 不参与超标判定, 避免误报。
 - **标注状态**: `待标注(pending)` 由系统自动创建, 人工标注为 `已确认(confirmed)` 或 `已忽略(ignored)`; 确认与忽略都必须填写标注说明, 用于后续追溯。
 
+## 达标率统计口径
+
+达标率 = 1 − 超标率, 超标率 = 超标记录数 ÷ 参与考核记录数。口径定义位于 `backend/app/domain/attainment.py`。
+
+- **参与考核**: 设有限值的“因子 + 时段”组合 —— 6 项因子的 24 小时均值, 以及 SO₂、NO₂、CO、O₃ 的 1 小时均值。
+- **不参与考核**: PM2.5、PM10 的 1 小时均值(未设限值)仅存档记录, 不计入分母; 统计接口以 `assessed_count`(考核基数) / `not_assessed_count`(无限值记录数) 单独返回, 界面同步说明。
+- **历史口径保护**: 新口径自 `RATE_RULE_EFFECTIVE_FROM`(默认 `2026-09-01`)起生效; 此前的历史记录仍按旧口径(全部录入记录计入分母)统计, 已对外发布的历史月份达标率不被重算。跨生效日期的查询按记录各自适用口径合并计算。
+
 ## API 概览
 
 统一前缀 `/api`, 成功直接返回数据对象; 失败返回 `{"error": {"code": "...", "message": "...", "fields": {...}}}`。
@@ -218,6 +226,7 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --buil
 | `DATABASE_URL` | SQLite(`backend/instance/air_monitor.db`) | 如 `postgresql+psycopg2://user:pass@host:5432/db` |
 | `CORS_ORIGINS` | `*` | 允许的前端来源, 逗号分隔 |
 | `TIMEZONE` | `Asia/Shanghai` | 展示时区 |
+| `RATE_RULE_EFFECTIVE_FROM` | `2026-09-01` | 达标率新口径(仅有限值记录计入分母)生效日期, 此前历史记录沿用旧口径 |
 | `AUTO_INIT_DB` / `AUTO_SEED` | `true`(开发) | 启动时自动建表 / 写入演示数据 |
 | `SEED_DEMO` | `true` | Docker 容器启动时是否写入演示数据 |
 | `GUNICORN_WORKERS` | `2` | 生产容器 worker 数量 |
@@ -228,7 +237,7 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --buil
 
 ```bash
 cd backend
-python -m pytest -q          # 43 个用例: 台账 CRUD/级联、录入与超标判定、标注规则、查询统计与导出、元数据接口
+python -m pytest -q          # 52 个用例: 台账 CRUD/级联、录入与超标判定、达标率口径、标注规则、查询统计与导出、元数据接口
 
 cd frontend
 npm run build                # 生产构建校验

@@ -78,7 +78,7 @@ export default function QueryPage() {
           label="超标记录"
           value={summary ? summary.exceeded_count : '-'}
           tone={summary?.exceeded_count ? 'danger' : undefined}
-          foot={summary ? `超标率 ${formatPercent(summary.exceed_rate)}` : ''}
+          foot={summary ? `超标率 ${formatPercent(summary.exceed_rate)} · 达标率 ${formatPercent(summary.attain_rate)}` : ''}
         />
         <StatCard label="平均浓度" value={summary ? formatNumber(summary.avg_value) : '-'} foot="按当前筛选范围计算" />
         <StatCard
@@ -88,6 +88,14 @@ export default function QueryPage() {
           foot={summary ? `${formatDateTime(summary.first_measured_at)} ~ ${formatDateTime(summary.last_measured_at)}` : ''}
         />
       </div>
+
+      {summary?.not_assessed_count > 0 ? (
+        <p className="muted small">
+          其中 {summary.not_assessed_count} 条记录未设限值
+          ({(summary.rate_scope?.not_assessable || []).join('、')}), 仅存档不参与达标率考核;
+          达标率按 {summary.assessed_count} 条考核记录计算。
+        </p>
+      ) : null}
 
       <StatisticsPanel
         params={statsParams}

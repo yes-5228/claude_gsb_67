@@ -62,4 +62,5 @@ def summarize(results):
         "total": len(results),
         "exceeded_count": len(exceeded),
         "exceeded_pollutants": [item["pollutant"] for item in exceeded],
+        "not_assessed_count": len([item for item in results if not item["applicable"]]),
     }

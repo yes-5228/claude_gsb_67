@@ -1,8 +1,10 @@
 """监测数据查询: 过滤条件解析, 统计聚合与导出数据准备."""
 from datetime import datetime, time
 
-from sqlalchemy import cast, func, or_
+from flask import current_app, has_app_context
+from sqlalchemy import and_, case, cast, func, or_
 
+from ..domain import attainment
 from ..domain.constants import (
     DATA_SOURCE_LABELS,
     EXCEEDANCE_STATUS_LABELS,
@@ -163,8 +165,41 @@ def measurement_query(args):
     return apply_sort(query, args.get("sort"), args.get("order")), filters
 
 
+def _rate_rule_effective_from():
+    """达标率新口径的生效时间, 优先取配置 RATE_RULE_EFFECTIVE_FROM."""
+    raw = None
+    if has_app_context():
+        raw = current_app.config.get("RATE_RULE_EFFECTIVE_FROM")
+    return attainment.parse_effective_from(raw)
+
+
+def _assessable_expression():
+    """SQL 表达式: 该记录设有对应限值(参与达标率考核)."""
+    return or_(
+        *[
+            and_(Measurement.pollutant == code, Measurement.period == period)
+            for code, period in attainment.assessable_pairs()
+        ]
+    )
+
+
+def _rate_base_expression(effective_from):
+    """SQL 表达式: 该记录计入达标率(超标率)分母.
+
+    生效时间之前的历史记录沿用旧口径(全部记录计入分母), 已对外发布的
+    历史月份达标率不被重算; 自生效时间起仅设有限值的记录参与考核.
+    """
+    return or_(Measurement.measured_at < effective_from, _assessable_expression())
+
+
+def _assessed_expression(effective_from):
+    """SQL 聚合表达式: 计入达标率分母的记录数."""
+    return func.sum(case((_rate_base_expression(effective_from), 1), else_=0))
+
+
 def summary(filters):
     """Aggregate counters shown above the query result table."""
+    effective_from = _rate_rule_effective_from()
     query = apply_filters(
         db.session.query(
             func.count(Measurement.id),
@@ -173,20 +208,26 @@ def summary(filters):
             func.min(Measurement.measured_at),
             func.max(Measurement.measured_at),
             func.avg(Measurement.value),
+            _assessed_expression(effective_from),
         ),
         filters,
     )
-    total, exceeded, stations, first_at, last_at, avg_value = query.one()
+    total, exceeded, stations, first_at, last_at, avg_value, assessed = query.one()
     total = int(total or 0)
     exceeded = int(exceeded or 0)
+    assessed = int(assessed or 0)
     return {
         "total": total,
         "exceeded_count": exceeded,
-        "exceed_rate": round(exceeded / total, 4) if total else 0.0,
+        "assessed_count": assessed,
+        "not_assessed_count": total - assessed,
+        "exceed_rate": round(exceeded / assessed, 4) if assessed else 0.0,
+        "attain_rate": round((assessed - exceeded) / assessed, 4) if assessed else None,
         "station_count": int(stations or 0),
         "first_measured_at": iso(first_at),
         "last_measured_at": iso(last_at),
         "avg_value": round(float(avg_value), 2) if avg_value is not None else None,
+        "rate_scope": attainment.scope_payload(effective_from),
     }
 
 
@@ -217,6 +258,8 @@ def statistics(args):
     value_expr = _metric_expression(metric).label("metric_value")
     count_expr = func.count(Measurement.id).label("row_count")
     exceeded_expr = func.sum(cast(Measurement.is_exceeded, db.Integer)).label("exceeded_count")
+    effective_from = _rate_rule_effective_from()
+    assessed_expr = _assessed_expression(effective_from).label("assessed_count")
 
     if group_by == "station":
         query = db.session.query(
@@ -227,21 +270,22 @@ def statistics(args):
             value_expr,
             count_expr,
             exceeded_expr,
+            assessed_expr,
         ).group_by(Station.id, Station.code, Station.name, Station.area)
         is_time_group = False
     elif group_by == "area":
         query = db.session.query(
-            Station.area.label("area"), value_expr, count_expr, exceeded_expr
+            Station.area.label("area"), value_expr, count_expr, exceeded_expr, assessed_expr
         ).group_by(Station.area)
         is_time_group = False
     elif group_by == "day":
         bucket = func.date(Measurement.measured_at).label("bucket")
-        query = db.session.query(bucket, value_expr, count_expr, exceeded_expr).group_by(bucket)
+        query = db.session.query(bucket, value_expr, count_expr, exceeded_expr, assessed_expr).group_by(bucket)
         is_time_group = True
     elif group_by == "month":
         year = func.extract("year", Measurement.measured_at).label("year")
         month = func.extract("month", Measurement.measured_at).label("month")
-        query = db.session.query(year, month, value_expr, count_expr, exceeded_expr).group_by(
+        query = db.session.query(year, month, value_expr, count_expr, exceeded_expr, assessed_expr).group_by(
             year, month
         )
         is_time_group = True
@@ -252,7 +296,7 @@ def statistics(args):
             "data_source": Measurement.data_source,
         }[group_by]
         query = db.session.query(
-            column.label("bucket"), value_expr, count_expr, exceeded_expr
+            column.label("bucket"), value_expr, count_expr, exceeded_expr, assessed_expr
         ).group_by(column)
         is_time_group = False
 
@@ -264,6 +308,7 @@ def statistics(args):
         data = dict(row._mapping)
         count = int(data.get("row_count") or 0)
         exceeded = int(data.get("exceeded_count") or 0)
+        assessed = int(data.get("assessed_count") or 0)
         raw_value = data.get("metric_value")
         if group_by == "station":
             key = data.get("station_code")
@@ -293,8 +338,11 @@ def statistics(args):
                 "label": label,
                 "value": round(float(raw_value), 2) if raw_value is not None else None,
                 "count": count,
+                "assessed_count": assessed,
+                "not_assessed_count": count - assessed,
                 "exceeded_count": exceeded,
-                "exceed_rate": round(exceeded / count, 4) if count else 0.0,
+                "exceed_rate": round(exceeded / assessed, 4) if assessed else 0.0,
+                "attain_rate": round((assessed - exceeded) / assessed, 4) if assessed else None,
             }
         )
 
@@ -309,8 +357,10 @@ def statistics(args):
         "items": items,
         "totals": {
             "count": sum(item["count"] for item in items),
+            "assessed_count": sum(item["assessed_count"] for item in items),
             "exceeded_count": sum(item["exceeded_count"] for item in items),
         },
+        "rate_scope": attainment.scope_payload(effective_from),
     }
 
 

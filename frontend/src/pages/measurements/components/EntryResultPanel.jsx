@@ -47,13 +47,21 @@ export default function EntryResultPanel({ result, summary, onClose }) {
               <div className="stat-card">
                 <div className="stat-label">其中超标</div>
                 <div className="stat-value danger-text">{summary.exceeded_count}</div>
-                <div className="stat-foot">超标率 {formatPercent(summary.exceed_rate)}</div>
+                <div className="stat-foot">
+                  超标率 {formatPercent(summary.exceed_rate)} · 达标率 {formatPercent(summary.attain_rate)}
+                </div>
               </div>
               <div className="stat-card">
                 <div className="stat-label">涉及监测点</div>
                 <div className="stat-value">{summary.station_count}</div>
               </div>
             </div>
+            {summary.not_assessed_count > 0 ? (
+              <p className="muted small">
+                当前筛选含 {summary.not_assessed_count} 条无限值记录(仅存档),
+                达标率按 {summary.assessed_count} 条考核记录计算。
+              </p>
+            ) : null}
             <dl className="kv">
               <dt>最早监测时间</dt>
               <dd>{formatDateTime(summary.first_measured_at)}</dd>
@@ -134,6 +142,9 @@ export default function EntryResultPanel({ result, summary, onClose }) {
             {payload.summary.exceeded_pollutants.length
               ? `: ${payload.summary.exceeded_pollutants.join(', ')}`
               : ''}
+            {payload.summary.not_assessed_count
+              ? `; ${payload.summary.not_assessed_count} 个因子未设限值仅记录, 不参与达标率统计`
+              : ''}
           </Alert>
         ) : (
           <div className="stat-grid">
@@ -159,6 +170,13 @@ export default function EntryResultPanel({ result, summary, onClose }) {
         )}
 
         <ResultTable columns={columns} rows={rows} />
+
+        {!isPreview && rows.filter((row) => row.applicable === false).length ? (
+          <p className="muted small">
+            {rows.filter((row) => row.applicable === false).length} 个因子未设限值仅记录,
+            不参与达标率统计。
+          </p>
+        ) : null}
 
         {payload.duplicates?.length ? (
           <Alert tone="warning">

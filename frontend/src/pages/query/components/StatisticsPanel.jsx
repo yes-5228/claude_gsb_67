@@ -29,7 +29,7 @@ export default function StatisticsPanel({ params, onChange, data, loading, error
   return (
     <SectionCard
       title="聚合统计"
-      hint="统计基于上方筛选条件, 可与结果表交叉验证"
+      hint="统计基于上方筛选条件; 达标率仅按设有限值(参与考核)的记录计算, 可与结果表交叉验证"
       actions={
         <>
           <div style={{ width: 160 }}>
@@ -68,8 +68,10 @@ export default function StatisticsPanel({ params, onChange, data, loading, error
                     <th>分组</th>
                     <th className="text-right">{isCount ? '数据条数' : '统计值'}</th>
                     <th className="text-right">数据量</th>
+                    <th className="text-right">考核基数</th>
                     <th className="text-right">超标数</th>
                     <th className="text-right">超标率</th>
+                    <th className="text-right">达标率</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -78,13 +80,21 @@ export default function StatisticsPanel({ params, onChange, data, loading, error
                       <td>{item.label}</td>
                       <td className="text-right strong">{formatNumber(item.value)}</td>
                       <td className="text-right">{item.count}</td>
+                      <td className="text-right">{item.assessed_count}</td>
                       <td className="text-right danger-text">{item.exceeded_count}</td>
                       <td className="text-right">{formatPercent(item.exceed_rate)}</td>
+                      <td className="text-right">{formatPercent(item.attain_rate)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            {data?.totals && data.totals.count > data.totals.assessed_count ? (
+              <p className="muted small">
+                共 {data.totals.count - data.totals.assessed_count} 条记录未设限值
+                ({(data.rate_scope?.not_assessable || []).join('、')}), 仅存档不计入达标率考核基数。
+              </p>
+            ) : null}
           </>
         ) : null}
       </div>

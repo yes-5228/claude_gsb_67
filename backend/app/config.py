@@ -33,6 +33,10 @@ class BaseConfig:
     TIMEZONE = os.getenv("TIMEZONE", "Asia/Shanghai")
     LIMIT_POLICY = "GB 3095-2012 环境空气质量标准(二级)"
 
+    # 达标率新口径(仅有限值记录计入分母)的生效日期; 此前历史记录沿用旧口径,
+    # 已对外发布的历史月份达标率不被重算
+    RATE_RULE_EFFECTIVE_FROM = os.getenv("RATE_RULE_EFFECTIVE_FROM", "2026-09-01")
+
     DEFAULT_PAGE_SIZE = 20
     MAX_PAGE_SIZE = 200
     MAX_BATCH_SIZE = 500
